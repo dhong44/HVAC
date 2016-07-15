@@ -1,0 +1,66 @@
+2016-05-30 09:41:54.367398,grab_data(),Device disconnected
+2016-05-30 09:45:30.584641,reader,Device disconnected
+2016-05-30 09:47:09.012771,reader,Device disconnected
+2016-05-30 09:50:11.844193,reader,Device disconnected
+2016-05-30 09:52:00.960172,Reader,Device disconnected
+2016-05-30 09:54:57.889793,Reader,Device disconnected
+2016-05-30 09:56:15.928832,Reader,Device disconnected
+2016-05-30 10:01:20.056181,Reader,Device disconnected
+2016-05-30 10:39:29.830423,Reader,Device disconnected
+2016-05-30 10:40:28.222503,grab_data(),name 'Simbleetemp' is not defined
+2016-05-30 10:41:47.478760,grab_data(),name 'Simbleetemp' is not defined
+2016-05-30 11:10:57.217735,grab_data(),name 'Simbleetemp' is not defined
+2016-05-30 11:11:36.032718,grab_data(),name 'Simbleetemp' is not defined
+2016-05-30 11:11:53.139834,grab_data(),name 'data' is not defined
+2016-05-30 11:12:43.041070,grab_data(),name 'brightness' is not defined
+2016-05-30 11:13:04.798549,grab_data(),name 'brightness' is not defined
+2016-05-30 11:23:10.911164,Reader,name 'Simbleetemp' is not defined
+2016-05-30 11:23:55.623652,Reader,name 'nsert_db' is not defined
+2016-05-30 11:24:06.722710,Reader,no such table: Temp
+2016-06-01 10:57:55.399739,Reader,Device disconnected
+2016-06-01 11:09:49.091455,Reader,Device disconnected
+2016-06-01 11:44:43.476622,Reader,name 'service' is not defined
+2016-06-01 11:46:00.452910,Reader,Peripheral instance has no attribute 'getcharacteristics'
+2016-06-01 12:59:11.771794,Reader,Device disconnected
+2016-06-02 07:39:10.680043,Reader,Device disconnected
+2016-06-03 11:07:08.352497,Reader,Device disconnected
+2016-06-03 11:08:04.672595,Reader,Device disconnected
+2016-06-03 11:11:16.688207,Reader,Device disconnected
+2016-06-08 12:16:24.807252,Reader,Device disconnected
+2016-06-08 13:01:02.289242,Reader,Device disconnected
+2016-06-08 13:01:48.989489,Reader,Device disconnected
+2016-06-09 10:33:51.991119,Reader,Device disconnected
+2016-06-17 09:26:46.882628,Reader,Device disconnected
+2016-06-17 09:37:02.876776,Reader,Device disconnected
+2016-06-17 09:41:28.419373,Reader,Device disconnected
+2016-06-17 09:51:19.442418,Reader,Device disconnected
+2016-06-17 10:00:34.617981,Reader,Device disconnected
+2016-06-17 11:03:32.460588,Reader,Device disconnected
+2016-06-22 13:43:42.498506,control(),Unexpected response (wr)
+2016-06-22 13:44:35.933104,control(),need more than 1 value to unpack
+2016-06-22 13:47:15.328555,set_interval(),concurrent poll() invocation
+2016-06-22 13:48:44.968789,set_interval(),concurrent poll() invocation
+2016-06-22 13:49:42.411525,set_interval(),concurrent poll() invocation
+2016-06-22 13:50:47.684193,set_interval(),concurrent poll() invocation
+2016-06-22 13:50:50.654199,set_interval(),concurrent poll() invocation
+2016-06-22 13:52:34.747835,control(),need more than 1 value to unpack
+2016-06-22 13:52:34.748541,control(),need more than 1 value to unpack
+2016-06-23 12:28:29.499161,control(),need more than 1 value to unpack
+2016-06-23 12:28:29.499795,control(),need more than 1 value to unpack
+2016-06-23 12:35:36.883475,control(),need more than 1 value to unpack
+2016-06-23 12:35:36.884651,control(),need more than 1 value to unpack
+2016-06-23 13:04:39.033802,control(),Unexpected response (find)
+2016-06-23 13:08:41.121200,control(),need more than 1 value to unpack
+2016-06-23 13:08:41.121734,control(),need more than 1 value to unpack
+2016-06-24 11:41:50.979698,control(),Device disconnected
+2016-06-24 11:41:51.046345,control(),Device disconnected
+2016-06-24 12:55:51.772684,control(),need more than 1 value to unpack
+2016-06-24 12:55:51.783292,control(),need more than 1 value to unpack
+2016-06-27 08:44:41.179245,control(),Device disconnected
+2016-06-27 08:48:12.727462,control(),Device disconnected
+2016-06-27 09:37:15.255262,control(),need more than 1 value to unpack
+2016-06-27 09:37:15.255521,control(),need more than 1 value to unpack
+2016-06-27 12:32:23.208353,control(),need more than 1 value to unpack
+2016-06-27 12:32:23.209802,control(),need more than 1 value to unpack
+2016-07-12 10:36:27.683901,control(),need more than 1 value to unpack
+2016-07-12 10:36:27.684391,control(),need more than 1 value to unpack
