@@ -4,6 +4,7 @@ from bluepy.btle import Peripheral, UUID
 from cleanup import cleanup
 from control import control
 from packet_interval import set_interval
+from clothing_prediction import parse_temp, predict_clothing
 
 def worker(num):
     """thread worker function"""
@@ -11,6 +12,9 @@ def worker(num):
     return
 
 if __name__ == '__main__':
+
+    sixAmTemp = parse_temperature()
+
     threads = []
     device= []
     queue = Queue()
