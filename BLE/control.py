@@ -1,4 +1,3 @@
-#from bluepy.btle import Peripheral, UUID
 from error.error_handle import log_error
 from sql.sqlite_ import insert_db
 from data import read
