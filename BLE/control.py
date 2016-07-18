@@ -4,7 +4,7 @@ from sql.sqlite_ import insert_db
 from data import read
 from notifications import enable_notifications
 
-def control(device):
+def control(device, queue):
 
 
     enable_notifications(device)
@@ -14,12 +14,13 @@ def control(device):
         while True:
 
             device.waitForNotifications(6000)
-                            
-            data = read(device)
-            print data
 
-            sql_data = [data]
+            data = read(device)
+            #print data
+
+            #sql_data = [data]
             #insert_db(sql_data)
+            queue.put(data)
 
     except Exception as err:
             method = 'control()'

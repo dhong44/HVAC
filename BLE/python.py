@@ -1,4 +1,5 @@
 import threading
+from Queue import Queue
 from bluepy.btle import Peripheral, UUID
 from cleanup import cleanup
 from control import control
@@ -12,6 +13,7 @@ def worker(num):
 if __name__ == '__main__':
     threads = []
     device= []
+    queue = Queue()
 
     MAC = ['CC:9B:84:26:0F:AC',
            'C1:2E:06:21:9D:CF']
@@ -22,9 +24,9 @@ if __name__ == '__main__':
         print address, "connected"
 
     for i in device:
-        t = threading.Thread(target=control, args=(i,))
+        t = threading.Thread(target=control, args=[i,queue],)
         threads.append(t)
         t.start()
 
-
-    
+    while True:
+        print(queue.get())
