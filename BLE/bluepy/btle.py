@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-
+#!/bin/sh
 from __future__ import print_function
 
 """Bluetooth Low Energy Python interface"""
@@ -9,11 +8,9 @@ import time
 import subprocess
 import binascii
 import select
-import struct
 
 Debugging = False
-script_path = os.path.join(os.path.abspath(os.path.dirname(__file__)))
-helperExe = os.path.join(script_path, "bluepy-helper")
+helperExe = os.path.join(os.path.abspath(os.path.dirname(__file__)), "bluepy-helper")
 
 SEC_LEVEL_LOW = "low"
 SEC_LEVEL_MEDIUM = "medium"
@@ -35,8 +32,6 @@ class BTLEException(Exception):
     DISCONNECTED = 1
     COMM_ERROR = 2
     INTERNAL_ERROR = 3
-    GATT_ERROR = 4
-    MGMT_ERROR = 5
 
     def __init__(self, code, message):
         self.code = code
@@ -64,7 +59,7 @@ class UUID:
         if len(val) <= 8:  # Short form
             val = ("0" * (8 - len(val))) + val + "00001000800000805F9B34FB"
 
-        self.binVal = binascii.a2b_hex(val.encode('utf-8'))
+        self.binVal = binascii.a2b_hex(val)
         if len(self.binVal) != 16:
             raise ValueError(
                 "UUID must be 16 bytes, got '%s' (len=%d)" % (val,
@@ -145,7 +140,7 @@ class Characteristic:
         return self.peripheral.readCharacteristic(self.valHandle)
 
     def write(self, val, withResponse=False):
-        return self.peripheral.writeCharacteristic(self.valHandle, val, withResponse)
+        self.peripheral.writeCharacteristic(self.valHandle, val, withResponse)
 
     # TODO: descriptors
 
@@ -175,7 +170,7 @@ class Descriptor:
 
     def __str__(self):
         return "Descriptor <%s>" % self.uuid.getCommonName()
-        
+
 class DefaultDelegate:
     def __init__(self):
         pass
@@ -183,30 +178,27 @@ class DefaultDelegate:
     def handleNotification(self, cHandle, data):
         DBG("Notification:", cHandle, "sent data", binascii.b2a_hex(data))
 
-    def handleDiscovery(self, scanEntry, isNewDev, isNewData):
-        DBG("Discovered device", scanEntry.addr)
 
-class BluepyHelper:
-    def __init__(self):
+class Peripheral:
+    def __init__(self, deviceAddr=None, addrType=ADDR_TYPE_PUBLIC):
         self._helper = None
         self._poller = None
-        self._stderr = None
+        self.services = {} # Indexed by UUID
+        self.addrType = addrType
+        self.discoveredAllServices = False
         self.delegate = DefaultDelegate()
+        if deviceAddr is not None:
+            self.connect(deviceAddr, addrType)
 
-    def withDelegate(self, delegate_):
+    def setDelegate(self, delegate_):
         self.delegate = delegate_
-        return self
 
-    def _startHelper(self,iface=None):
+    def _startHelper(self):
         if self._helper is None:
             DBG("Running ", helperExe)
-            self._stderr = open(os.devnull, "w")
-            args=[helperExe]
-            if iface is not None: args.append(str(iface))
-            self._helper = subprocess.Popen(args,
+            self._helper = subprocess.Popen([helperExe],
                                             stdin=subprocess.PIPE,
                                             stdout=subprocess.PIPE,
-                                            stderr=self._stderr,
                                             universal_newlines=True)
             self._poller = select.poll()
             self._poller.register(self._helper.stdout, select.POLLIN)
@@ -219,9 +211,6 @@ class BluepyHelper:
             self._helper.stdin.flush()
             self._helper.wait()
             self._helper = None
-        if self._stderr is not None:
-            self._stderr.close()
-            self._stderr = None
 
     def _writeCmd(self, cmd):
         if self._helper is None:
@@ -231,13 +220,6 @@ class BluepyHelper:
         self._helper.stdin.write(cmd)
         self._helper.stdin.flush()
 
-    def _mgmtCmd(self, cmd):
-        self._writeCmd(cmd + '\n')
-        rsp = self._waitResp('mgmt')
-        if rsp['code'][0] != 'success':
-            self._stopHelper()
-            raise BTLEException(BTLEException.DISCONNECTED,
-                                "Failed to execute mgmt cmd '%s'" % (cmd))
 
     @staticmethod
     def parseResp(line):
@@ -252,7 +234,7 @@ class BluepyHelper:
             elif tval[0]=="h":
                 val = int(tval[1:], 16)
             elif tval[0]=='b':
-                val = binascii.a2b_hex(tval[1:].encode('utf-8'))
+                val = binascii.a2b_hex(tval[1:])
             else:
                 raise BTLEException(BTLEException.INTERNAL_ERROR,
                              "Cannot understand response value %s" % repr(tval))
@@ -262,7 +244,7 @@ class BluepyHelper:
                 resp[tag].append(val)
         return resp
 
-    def _waitResp(self, wantType, timeout=None):
+    def _getResp(self, wantType, timeout=None):
         while True:
             if self._helper.poll() is not None:
                 raise BTLEException(BTLEException.INTERNAL_ERROR, "Helper exited")
@@ -275,89 +257,52 @@ class BluepyHelper:
 
             rv = self._helper.stdout.readline()
             DBG("Got:", repr(rv))
-            if rv.startswith('#') or rv == '\n':
+            if rv.startswith('#'):
                 continue
 
-            resp = BluepyHelper.parseResp(rv)
+            resp = Peripheral.parseResp(rv)
             if 'rsp' not in resp:
-                raise BTLEException(BTLEException.INTERNAL_ERROR, "No response type indicator")
-
+                raise BTLEException(BTLEException.INTERNAL_ERROR,
+                                "No response type indicator")
             respType = resp['rsp'][0]
-            if respType in wantType:
+            if respType == 'ntfy':
+                hnd = resp['hnd'][0]
+                data = resp['d'][0]
+                if self.delegate is not None:
+                    self.delegate.handleNotification(hnd, data)
+                if wantType != respType:
+                    continue
+                    
+            if respType == 'ind':
+                hnd = resp['hnd'][0]
+                data = resp['d'][0]
+                self.delegate.handleNotification(hnd, data)
+                if wantType != respType:
+                    continue
+
+            if respType == wantType:
                 return resp
             elif respType == 'stat' and resp['state'][0] == 'disc':
                 self._stopHelper()
                 raise BTLEException(BTLEException.DISCONNECTED, "Device disconnected")
             elif respType == 'err':
                 errcode=resp['code'][0]
-                if errcode=='nomgmt':
-                    raise BTLEException(BTLEException.MGMT_ERROR, "Management not available (permissions problem?)")
-                else:
-                    raise BTLEException(BTLEException.COMM_ERROR, "Error from Bluetooth stack (%s)" % errcode)
-            elif respType == 'scan':
-                # Scan response when we weren't interested. Ignore it
-                continue
+                raise BTLEException(BTLEException.COMM_ERROR, "Error from Bluetooth stack (%s)" % errcode)
             else:
                 raise BTLEException(BTLEException.INTERNAL_ERROR, "Unexpected response (%s)" % respType)
 
     def status(self):
         self._writeCmd("stat\n")
-        return self._waitResp(['stat'])
+        return self._getResp('stat')
 
-
-class Peripheral(BluepyHelper):
-    def __init__(self, deviceAddr=None, addrType=ADDR_TYPE_PUBLIC, iface=None):
-        BluepyHelper.__init__(self)
-        self.services = {} # Indexed by UUID
-        self.discoveredAllServices = False
-        (self.addr, self.addrType, self.iface) = (None, None, None)
-
-        if isinstance(deviceAddr, ScanEntry):
-            self.connect(deviceAddr.addr, deviceAddr.addrType, deviceAddr.iface)
-        elif deviceAddr is not None:
-            self.connect(deviceAddr, addrType, iface)
-
-    def setDelegate(self, delegate_): # same as withDelegate(), deprecated
-        return self.withDelegate(delegate_)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, type, value, traceback):
-        self.disconnect()
-
-    def _getResp(self, wantType, timeout=None):
-        if isinstance(wantType, list) is not True:
-            wantType = [wantType]
-
-        while True:
-            resp = self._waitResp(wantType + ['ntfy', 'ind'], timeout)
-            if resp is None:
-                return None
-
-            respType = resp['rsp'][0]
-            if respType == 'ntfy' or respType == 'ind':
-                hnd = resp['hnd'][0]
-                data = resp['d'][0]
-                if self.delegate is not None:
-                    self.delegate.handleNotification(hnd, data)
-                if respType not in wantType:
-                    continue
-            return resp
-
-    def connect(self, addr, addrType=ADDR_TYPE_PUBLIC, iface=None):
+    def connect(self, addr, addrType):
         if len(addr.split(":")) != 6:
             raise ValueError("Expected MAC address, got %s" % repr(addr))
         if addrType not in (ADDR_TYPE_PUBLIC, ADDR_TYPE_RANDOM):
             raise ValueError("Expected address type public or random, got {}".format(addrType))
         self._startHelper()
         self.deviceAddr = addr
-        self.addrType = addrType
-        self.iface = iface
-        if iface is not None:
-            self._writeCmd("conn %s %s %s\n" % (addr, addrType, "hci"+str(iface)))
-        else:
-            self._writeCmd("conn %s %s\n" % (addr, addrType))
+        self._writeCmd("conn %s %s\n" % (addr, addrType))
         rsp = self._getResp('stat')
         while rsp['state'][0] == 'tryconn':
             rsp = self._getResp('stat')
@@ -401,8 +346,6 @@ class Peripheral(BluepyHelper):
             return self.services[uuid]
         self._writeCmd("svcs %s\n" % uuid)
         rsp = self._getResp('find')
-        if 'hstart' not in rsp:
-            raise BTLEException(BTLEException.GATT_ERROR, "Service %s not found" % (uuid.getCommonName()))
         svc = Service(self, uuid, rsp['hstart'][0], rsp['hend'][0])
         self.services[uuid] = svc
         return svc
@@ -452,8 +395,6 @@ class Peripheral(BluepyHelper):
         return self._getResp('rd')
 
     def writeCharacteristic(self, handle, val, withResponse=False):
-        # Without response, a value too long for one packet will be truncated,
-        # but with response, it will be sent as a queued write
         cmd = "wrr" if withResponse else "wr"
         self._writeCmd("%s %X %s\n" % (cmd, handle, binascii.b2a_hex(val).decode('utf-8')))
         return self._getResp('wr')
@@ -462,177 +403,16 @@ class Peripheral(BluepyHelper):
         self._writeCmd("secu %s\n" % level)
         return self._getResp('stat')
 
-    def unpair(self, address):
-        self._mgmtCmd("unpair %s" % (address))
-
     def setMTU(self, mtu):
         self._writeCmd("mtu %x\n" % mtu)
         return self._getResp('stat')
 
     def waitForNotifications(self, timeout):
-         resp = self._getResp(['ntfy','ind'], timeout)
+         resp = self._getResp('ntfy', timeout)
          return (resp != None)
 
     def __del__(self):
         self.disconnect()
-
-class ScanEntry:
-    addrTypes = { 1 : ADDR_TYPE_PUBLIC,
-                  2 : ADDR_TYPE_RANDOM
-                }
-
-    dataTags = {
-        1 : 'Flags',
-        2 : 'Incomplete 16b Services',
-        3 : 'Complete 16b Services',
-        4 : 'Incomplete 32b Services',
-        5 : 'Complete 32b Services',
-        6 : 'Incomplete 128b Services',
-        7 : 'Complete 128b Services',
-        8 : 'Short Local Name',
-        9 : 'Complete Local Name',
-        0xA : 'Tx Power',
-        0x14 : '16b Service Solicitation',
-        0x1F : '32b Service Solicitation',
-        0x15 : '128b Service Solicitation',
-        0x16 : '16b Service Data',
-        0x20 : '32b Service Data',
-        0x21 : '128b Service Data',
-        0x17 : 'Public Target Address',
-        0x18 : 'Random Target Address',
-        0x19 : 'Appearance',
-        0x1A : 'Advertising Interval',
-        0xFF : 'Manufacturer',
-    }
-
-    def __init__(self, addr, iface):
-        self.addr = addr
-        self.iface = iface
-        self.addrType = None
-        self.rssi = None
-        self.connectable = False
-        self.rawData = None
-        self.scanData = {}
-        self.updateCount = 0
-
-    def _update(self, resp):
-        addrType = self.addrTypes.get(resp['type'][0], None)
-        if (self.addrType is not None) and (addrType != self.addrType):
-            raise BTLEException("Address type changed during scan, for address %s" % self.addr)
-        self.addrType = addrType
-        self.rssi = -resp['rssi'][0]
-        self.connectable = ((resp['flag'][0] & 0x4) == 0)
-        data = resp.get('d', [''])[0]
-        self.rawData = data
-        
-        # Note: bluez is notifying devices twice: once with advertisement data,
-        # then with scan response data. Also, the device may update the
-        # advertisement or scan data
-        isNewData = False
-        while len(data) >= 2:
-            sdlen, sdid = struct.unpack_from('<BB', data)
-            val = data[2 : sdlen + 1]
-            if (sdid not in self.scanData) or (val != self.scanData[sdid]):
-                isNewData = True
-            self.scanData[sdid] = val
-            data = data[sdlen + 1:]
-
-        self.updateCount += 1
-        return isNewData
-        
-    def getDescription(self, sdid):
-        return self.dataTags.get(sdid, hex(sdid))
-
-    def getValueText(self, sdid):
-        val = self.scanData.get(sdid, None)
-        if val is None:
-            return None
-        if (sdid==8) or (sdid==9):
-            return val.decode('utf-8')
-        else:
-            return binascii.b2a_hex(val).decode('utf-8')
-
-    def getScanData(self):
-        '''Returns list of tuples [(tag, description, value)]'''
-        return [ (sdid, self.getDescription(sdid), self.getValueText(sdid))
-                    for sdid in self.scanData.keys() ]
-         
- 
-class Scanner(BluepyHelper):
-    def __init__(self,iface=0):
-        BluepyHelper.__init__(self)
-        self.scanned = {}
-        self.iface=iface
-    
-    def start(self):
-        self._startHelper(iface=self.iface)
-        self._mgmtCmd("le on")
-        self._writeCmd("scan\n")
-        rsp = self._waitResp("mgmt")
-        if rsp["code"][0] == "success":
-            return
-        # Sometimes previous scan still ongoing
-        if rsp["code"][0] == "busy":
-            self._mgmtCmd("scanend")
-            rsp = self._waitResp("stat")
-            assert rsp["state"][0] == "disc"
-            self._mgmtCmd("scan")
-
-    def stop(self):
-        self._mgmtCmd("scanend")
-        self._stopHelper()
-
-    def clear(self):
-        self.scanned = {}
-
-    def process(self, timeout=10.0):
-        if self._helper is None:
-            raise BTLEException(BTLEException.INTERNAL_ERROR,
-                                "Helper not started (did you call start()?)")
-        start = time.time()
-        while True:
-            if timeout:
-                remain = start + timeout - time.time()
-                if remain <= 0.0: 
-                    break
-            else:
-                remain = None
-            resp = self._waitResp(['scan', 'stat'], remain)
-            if resp is None:
-                break
-
-            respType = resp['rsp'][0]
-            if respType == 'stat':
-                # if scan ended, restart it
-                if resp['state'][0] == 'disc':
-                    self._mgmtCmd("scan")
-
-            elif respType == 'scan':
-                # device found
-                addr = binascii.b2a_hex(resp['addr'][0]).decode('utf-8')
-                addr = ':'.join([addr[i:i+2] for i in range(0,12,2)])
-                if addr in self.scanned:
-                    dev = self.scanned[addr]
-                else:
-                    dev = ScanEntry(addr, self.iface)
-                    self.scanned[addr] = dev
-                isNewData = dev._update(resp)
-                if self.delegate is not None:
-                    self.delegate.handleDiscovery(dev, (dev.updateCount <= 1), isNewData)
-                 
-            else:
-                raise BTLEException(BTLEException.INTERNAL_ERROR, "Unexpected response: " + respType)
-
-    def getDevices(self):
-        return self.scanned.values()
-
-    def scan(self, timeout=10):
-        self.clear()
-        self.start()
-        self.process(timeout)
-        self.stop()
-        return self.getDevices()
-
 
 def capitaliseName(descr):
     words = descr.split(" ")
@@ -656,16 +436,211 @@ class _UUIDNameMap:
             return self.idMap[uuid].commonName
         return None
 
-def get_json_uuid():
-    import json
-    with open(os.path.join(script_path, 'uuids.json'),"rb") as fp:
-        uuid_data = json.loads(fp.read().decode("utf-8"))
-    for k in ['service_UUIDs', 'characteristic_UUIDs', 'descriptor_UUIDs' ]:
-        for number,cname,name in uuid_data[k]:
-            yield UUID(number, cname)
-            yield UUID(number, name)
+AssignedNumbers = _UUIDNameMap( [
+    # Service UUIDs
+    UUID(0x1811, "Alert Notification Service"),
+    UUID(0x180F, "Battery Service"),
+    UUID(0x1810, "Blood Pressure"),
+    UUID(0x181B, "Body Composition"),
+    UUID(0x181E, "Bond Management"),
+    UUID(0x181F, "Continuous Glucose Monitoring"),
+    UUID(0x1805, "Current Time Service"),
+    UUID(0x1818, "Cycling Power"),
+    UUID(0x1816, "Cycling Speed and Cadence"),
+    UUID(0x180A, "Device Information"),
+    UUID(0x181A, "Environmental Sensing"),
+    UUID(0x1800, "Generic Access"),
+    UUID(0x1801, "Generic Attribute"),
+    UUID(0x1808, "Glucose"),
+    UUID(0x1809, "Health Thermometer"),
+    UUID(0x180D, "Heart Rate"),
+    UUID(0x1812, "Human Interface Device"),
+    UUID(0x1802, "Immediate Alert"),
+    UUID(0x1820, "Internet Protocol Support"),
+    UUID(0x1803, "Link Loss"),
+    UUID(0x1819, "Location and Navigation"),
+    UUID(0x1807, "Next DST Change Service"),
+    UUID(0x180E, "Phone Alert Status Service"),
+    UUID(0x1806, "Reference Time Update Service"),
+    UUID(0x1814, "Running Speed and Cadence"),
+    UUID(0x1813, "Scan Parameters"),
+    UUID(0x1804, "Tx Power"),
+    UUID(0x181C, "User Data"),
+    UUID(0x181D, "Weight Scale"),
 
-AssignedNumbers = _UUIDNameMap( list(get_json_uuid() ))
+    # Characteristic UUIDs
+    UUID(0x2A7E, "Aerobic Heart Rate Lower Limit"),
+    UUID(0x2A84, "Aerobic Heart Rate Upper Limit"),
+    UUID(0x2A7F, "Aerobic Threshold"),
+    UUID(0x2A80, "Age"),
+    UUID(0x2A5A, "Aggregate"),
+    UUID(0x2A42, "Alert Category ID Bit Mask"),
+    UUID(0x2A43, "Alert Category ID"),
+    UUID(0x2A06, "Alert Level"),
+    UUID(0x2A44, "Alert Notification Control Point"),
+    UUID(0x2A3F, "Alert Status"),
+    UUID(0x2A81, "Anaerobic Heart Rate Lower Limit"),
+    UUID(0x2A82, "Anaerobic Heart Rate Upper Limit"),
+    UUID(0x2A83, "Anaerobic Threshold"),
+    UUID(0x2A58, "Analog"),
+    UUID(0x2A73, "Apparent Wind Direction"),
+    UUID(0x2A72, "Apparent Wind Speed"),
+    UUID(0x2A01, "Appearance"),
+    UUID(0x2AA3, "Barometric Pressure Trend"),
+    UUID(0x2A19, "Battery Level"),
+    UUID(0x2A49, "Blood Pressure Feature"),
+    UUID(0x2A35, "Blood Pressure Measurement"),
+    UUID(0x2A9B, "Body Composition Feature"),
+    UUID(0x2A9C, "Body Composition Measurement"),
+    UUID(0x2A38, "Body Sensor Location"),
+    UUID(0x2AA4, "Bond Management Control Point"),
+    UUID(0x2AA5, "Bond Management Feature"),
+    UUID(0x2A22, "Boot Keyboard Input Report"),
+    UUID(0x2A32, "Boot Keyboard Output Report"),
+    UUID(0x2A33, "Boot Mouse Input Report"),
+    UUID(0x2AA8, "CGM Feature"),
+    UUID(0x2AA7, "CGM Measurement"),
+    UUID(0x2AAB, "CGM Session Run Time"),
+    UUID(0x2AAA, "CGM Session Start Time"),
+    UUID(0x2AAC, "CGM Specific Ops Control Point"),
+    UUID(0x2AA9, "CGM Status"),
+    UUID(0x2A5C, "CSC Feature"),
+    UUID(0x2A5B, "CSC Measurement"),
+    UUID(0x2AA6, "Central Address Resolution"),
+    UUID(0x2905, "Characteristic Aggregate Formate"),
+    UUID(0x2900, "Characteristic Extended Properties"),
+    UUID(0x2904, "Characteristic Format"),
+    UUID(0x2901, "Characteristic User Description"),
+    UUID(0x2803, "Characteristic"),
+    UUID(0x2902, "Client Characteristic Configuration"),
+    UUID(0x2A2B, "Current Time"),
+    UUID(0x2A66, "Cycling Power Control Point"),
+    UUID(0x2A65, "Cycling Power Feature"),
+    UUID(0x2A63, "Cycling Power Measurement"),
+    UUID(0x2A64, "Cycling Power Vector"),
+    UUID(0x2A0D, "DST Offset"),
+    UUID(0x2A99, "Database Change Increment"),
+    UUID(0x2A08, "Date Time"),
+    UUID(0x2A85, "Date of Birth"),
+    UUID(0x2A86, "Date of Threshold Assessment"),
+    UUID(0x2A0A, "Day Date Time"),
+    UUID(0x2A09, "Day of Week"),
+    UUID(0x2A7D, "Descriptor Value Changed"),
+    UUID(0x2A00, "Device Name"),
+    UUID(0x2A7B, "Dew Point"),
+    UUID(0x2A56, "Digital"),
+    UUID(0x2A6C, "Elevation"),
+    UUID(0x2A87, "Email Address"),
+    UUID(0x290B, "Environmental Sensing Configuration"),
+    UUID(0x290C, "Environmental Sensing Measurement"),
+    UUID(0x290D, "Environmental Sensing Trigger Setting"),
+    UUID(0x2A0C, "Exact Time 256"),
+    UUID(0x2907, "External Report Reference"),
+    UUID(0x2A88, "Fat Burn Heart Rate Lower Limit"),
+    UUID(0x2A89, "Fat Burn Heart Rate Upper Limit"),
+    UUID(0x2A26, "Firmware Revision String"),
+    UUID(0x2A8A, "First Name"),
+    UUID(0x2A8B, "Five Zone Heart Rate Limits"),
+    UUID(0x2A8C, "Gender"),
+    UUID(0x2A51, "Glucose Feature"),
+    UUID(0x2A34, "Glucose Measurement Context"),
+    UUID(0x2A18, "Glucose Measurement"),
+    UUID(0x2A74, "Gust Factor"),
+    UUID(0x2A4C, "HID Control Point"),
+    UUID(0x2A4A, "HID Information"),
+    UUID(0x2A27, "Hardware Revision String"),
+    UUID(0x2A39, "Heart Rate Control Point"),
+    UUID(0x2A8D, "Heart Rate Max"),
+    UUID(0x2A37, "Heart Rate Measurement"),
+    UUID(0x2A7A, "Heat Index"),
+    UUID(0x2A8E, "Height"),
+    UUID(0x2A8F, "Hip Circumference"),
+    UUID(0x2A6F, "Humidity"),
+    UUID(0x2A2A, "IEEE 11073-20601 Regulatory Certification Data List"),
+    UUID(0x2A2A, "IEEE 11073-20601 Regulatory Cert. Data List"),
+    UUID(0x2802, "Include"),
+    UUID(0x2A36, "Intermediate Cuff Pressure"),
+    UUID(0x2A1E, "Intermediate Temperature"),
+    UUID(0x2A77, "Irradiance"),
+    UUID(0x2A6B, "LN Control Point"),
+    UUID(0x2A6A, "LN Feature"),
+    UUID(0x2AA2, "Language"),
+    UUID(0x2A90, "Last Name"),
+    UUID(0x2A0F, "Local Time Information"),
+    UUID(0x2A67, "Location and Speed"),
+    UUID(0x2A2C, "Magnetic Declination"),
+    UUID(0x2AA0, "Magnetic Flux Density - 2D"),
+    UUID(0x2AA1, "Magnetic Flux Density - 3D"),
+    UUID(0x2A29, "Manufacturer Name String"),
+    UUID(0x2A91, "Maximum Recommended Heart Rate"),
+    UUID(0x2A21, "Measurement Interval"),
+    UUID(0x2A24, "Model Number String"),
+    UUID(0x2A68, "Navigation"),
+    UUID(0x2A46, "New Alert"),
+    UUID(0x2909, "Number of Digitals"),
+    UUID(0x2A04, "Peripheral Preferred Connection Parameters"),
+    UUID(0x2A02, "Peripheral Privacy Flag"),
+    UUID(0x2A50, "PnP ID"),
+    UUID(0x2A75, "Pollen Concentration"),
+    UUID(0x2A69, "Position Quality"),
+    UUID(0x2A6D, "Pressure"),
+    UUID(0x2800, "Primary Service"),
+    UUID(0x2A4E, "Protocol Mode"),
+    UUID(0x2A54, "RSC Feature"),
+    UUID(0x2A53, "RSC Measurement"),
+    UUID(0x2A78, "Rainfall"),
+    UUID(0x2A03, "Reconnection Address"),
+    UUID(0x2A52, "Record Access Control Point"),
+    UUID(0x2A14, "Reference Time Information"),
+    UUID(0x2A4B, "Report Map"),
+    UUID(0x2908, "Report Reference"),
+    UUID(0x2A4D, "Report"),
+    UUID(0x2A92, "Resting Heart Rate"),
+    UUID(0x2A40, "Ringer Control Point"),
+    UUID(0x2A41, "Ringer Setting"),
+    UUID(0x2A55, "SC Control Point"),
+    UUID(0x2A4F, "Scan Interval Window"),
+    UUID(0x2A31, "Scan Refresh"),
+    UUID(0x2801, "Secondary Service"),
+    UUID(0x2A5D, "Sensor Location"),
+    UUID(0x2A25, "Serial Number String"),
+    UUID(0x2903, "Server Characteristic Configuration"),
+    UUID(0x2A05, "Service Changed"),
+    UUID(0x2A28, "Software Revision String"),
+    UUID(0x2A93, "Sport Type for Aerobic/Anaerobic Thresholds"),
+    UUID(0x2A47, "Supported New Alert Category"),
+    UUID(0x2A48, "Supported Unread Alert Category"),
+    UUID(0x2A23, "System ID"),
+    UUID(0x2A1C, "Temperature Measurement"),
+    UUID(0x2A1D, "Temperature Type"),
+    UUID(0x2A6E, "Temperature"),
+    UUID(0x2A94, "Three Zone Heart Rate Limits"),
+    UUID(0x2A12, "Time Accuracy"),
+    UUID(0x2A13, "Time Source"),
+    UUID(0x290E, "Time Trigger Setting"),
+    UUID(0x2A16, "Time Update Control Point"),
+    UUID(0x2A17, "Time Update State"),
+    UUID(0x2A0E, "Time Zone"),
+    UUID(0x2A11, "Time with DST"),
+    UUID(0x2A7C, "Trend"),
+    UUID(0x2A71, "True Wind Direction"),
+    UUID(0x2A70, "True Wind Speed"),
+    UUID(0x2A95, "Two Zone Heart Rate Limit"),
+    UUID(0x2A07, "Tx Power Level"),
+    UUID(0x2A76, "UV Index"),
+    UUID(0x2A45, "Unread Alert Status"),
+    UUID(0x2A9F, "User Control Point"),
+    UUID(0x2A9A, "User Index"),
+    UUID(0x2A96, "VO2 Max"),
+    UUID(0x2906, "Valid Range"),
+    UUID(0x290A, "Value Trigger Setting"),
+    UUID(0x2A97, "Waist Circumference"),
+    UUID(0x2A9D, "Weight Measurement"),
+    UUID(0x2A9E, "Weight Scale Feature"),
+    UUID(0x2A98, "Weight"),
+    UUID(0x2A79, "Wind Chill"),
+    ])
+
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
@@ -685,7 +660,7 @@ if __name__ == '__main__':
         for svc in conn.getServices():
             print(str(svc), ":")
             for ch in svc.getCharacteristics():
-                print("    {}, hnd={}, supports {}".format(ch, hex(ch.handle), ch.propertiesToString()))
+                print("    {}, supports {}".format(ch, ch.propertiesToString()))
                 chName = AssignedNumbers.getCommonName(ch.uuid)
                 if (ch.supportsRead()):
                     try:
